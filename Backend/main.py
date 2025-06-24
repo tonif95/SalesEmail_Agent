@@ -32,8 +32,6 @@ app = FastAPI(
 )
 
 # --- CORS Middleware Setup ---
-# This allows your React frontend (e.g., running on localhost:3000) to make requests to this backend.
-# Adjust the `allow_origins` list to your frontend's actual URL(s) in production.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allows all origins, consider restricting in production
@@ -43,17 +41,15 @@ app.add_middleware(
 )
 
 # --- Pydantic Model for Request Body ---
-# Define a model for the incoming request data.
-# This allows you to pass parameters from your frontend to the backend logic.
 class EmailRequest(BaseModel):
     user_query: str = "Write a cold sales email about ComplAI's SOC2 compliance tool."
-    to_email_address: str = "empresaliax@gmail.com"
+    to_email_address: str = "tuemail@gmail.com"
     subject: str = "Consulta sobre cumplimiento SOC2 con ComplAI"
 
 
 # --- Function to send emails, decorated as a tool ---
 @function_tool
-def send_email(body: str, subject: str = "Email de ventas", to_email_address: str = "empresaliax@gmail.com"):
+def send_email(body: str, subject: str = "Email de ventas", to_email_address: str = "tuemail@gmail.com"):
     """
     Sends an email using the Resend API.
     This function is exposed as a tool for the AI agents.
@@ -63,7 +59,7 @@ def send_email(body: str, subject: str = "Email de ventas", to_email_address: st
         return {"status": "failure", "message": "RESEND_API_KEY not configured."}
 
     # Ensure this email address is verified in your Resend account
-    from_email = "info@mamaencalma.com"
+    from_email = "info@mamaencalma.com" # Replace with your verified Resend email
 
     headers = {
         "Authorization": f"Bearer {RESEND_API_KEY}",
@@ -85,9 +81,8 @@ def send_email(body: str, subject: str = "Email de ventas", to_email_address: st
         response_data = response.json()
         if response.status_code == 202:
             print(f"✅ Email sent successfully to {to_email_address}. ID: {response_data.get('id')}")
-            return {"status": "success", "id": response_data.get('id')}
+            return {"status": "success", "id": response_data.get('id'), "message": "Email sent successfully!"}
         else:
-            # Handle cases where Resend might return 200 OK but with an error message in the body
             print(f"⚠️ Email processed with non-202 code: {response.status_code}, {response.text}")
             return {"status": "info", "message": response.text}
     except requests.exceptions.RequestException as e:
@@ -103,7 +98,10 @@ async def generate_and_send_email_workflow(
 ):
     """
     Encapsulates the AI agent workflow for generating and sending a sales email.
+    Collects and returns detailed steps of the process.
     """
+    steps_log = []
+
     instructions_base = "a company that provides a SaaS tool for ensuring SOC2 compliance and preparing for audits, powered by AI."
 
     # Instructions for each agent
@@ -148,6 +146,7 @@ async def generate_and_send_email_workflow(
     )
 
     # --- Phase 1: Generate emails ---
+    steps_log.append({"step": "Inicio del proceso", "message": "Generando emails con los agentes de ventas..."})
     print("\n--- Generating emails with sales agents ---")
     with trace("Sales Email Generation"):
         results = await asyncio.gather(
@@ -159,19 +158,23 @@ async def generate_and_send_email_workflow(
 
         emails_for_picker = "Cold sales emails:\n\n" + "\n\n---\n\n".join(outputs)
 
+        steps_log.append({"step": "Generación de Emails", "message": "Tres borradores de email generados.", "details": outputs})
         print("\n--- Generated Emails ---")
         for i, email in enumerate(outputs):
             print(f"\nEmail {i + 1}:\n{email}")
             print("-" * 40)
 
         # --- Phase 2: Select the best email ---
+        steps_log.append({"step": "Selección del Mejor Email", "message": "El agente selector está eligiendo el mejor email..."})
         print("\n--- Selecting the best email ---")
         best_email_result = await Runner.run(sales_picker, emails_for_picker)
         best_email_content = best_email_result.final_output
 
+        steps_log.append({"step": "Email Seleccionado", "message": "El mejor email ha sido seleccionado.", "details": best_email_content})
         print(f"\n✅ Best email selected:\n{best_email_content}")
 
     # --- Phase 3: Sales Manager sends the best email ---
+    steps_log.append({"step": "Envío de Email", "message": f"El Sales Manager está enviando el email a {to_email_address}..."})
     print("\n--- Sales Manager will send the best email ---")
     manager_message = (
         "Please use the 'send_email' tool to send the following email:\n\n"
@@ -182,8 +185,10 @@ async def generate_and_send_email_workflow(
 
     with trace("Sales Manager in action"):
         manager_run_result = await Runner.run(sales_manager, manager_message)
-        print(f"\n📤 Final result from Sales Manager:\n{manager_run_result.final_output}")
-        return manager_run_result.final_output
+        final_output = manager_run_result.final_output
+        steps_log.append({"step": "Email Enviado", "message": "Proceso completado.", "details": final_output})
+        print(f"\n📤 Final result from Sales Manager:\n{final_output}")
+        return {"status": "success", "steps": steps_log, "final_email_sent_result": final_output}
 
 
 # --- FastAPI Endpoint ---
@@ -192,6 +197,7 @@ async def send_sales_email_endpoint(request: EmailRequest):
     """
     Endpoint to trigger the sales email generation and sending workflow.
     Expects a JSON body with 'user_query', 'to_email_address', and 'subject'.
+    Returns detailed steps and final result.
     """
     try:
         print(f"Received request to send email: {request.dict()}")
@@ -200,7 +206,7 @@ async def send_sales_email_endpoint(request: EmailRequest):
             request.to_email_address,
             request.subject
         )
-        return {"message": "Email workflow initiated successfully", "details": result}
+        return {"message": "Email workflow initiated successfully", "data": result}
     except Exception as e:
         print(f"Error in /send-sales-email/ endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
@@ -210,4 +216,3 @@ async def send_sales_email_endpoint(request: EmailRequest):
 async def read_root():
     """Basic health check endpoint."""
     return {"message": "ComplAI Sales Email Sender Backend is running!"}
-
